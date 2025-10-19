@@ -1,22 +1,10 @@
-from fastapi import FastAPI, Depends, Query, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from sqlalchemy import func
-from datetime import datetime, date, timedelta
 import nats
 import json
 
 from shared.database import get_db, engine, Base
-from shared.models import Event
-from backend.app.schemas import (
-    EventsIngestRequest,
-    EventsIngestResponse,
-    DAUResponse,
-    DAUItem,
-    TopEventsResponse,
-    TopEventItem,
-    RetentionResponse,
-    RetentionCohort,
-)
+from backend.app import crud, schemas
 from shared.config import settings
 
 app = FastAPI(
@@ -41,8 +29,14 @@ async def shutdown_event():
         await nats_client.close()
 
 
-@app.post("/events", response_model=EventsIngestResponse)
-async def ingest_events(request: EventsIngestRequest):
+@app.post("/events", response_model=schemas.EventsIngestResponse)
+async def ingest_events(request: schemas.EventsIngestRequest):
+    """
+    Ingest user events for processing.
+
+    Accepts a batch of events and queues them for asynchronous processing via NATS.
+    Returns immediately with acceptance status.
+    """
     if not nats_client or not getattr(nats_client, "is_connected", False):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -63,116 +57,68 @@ async def ingest_events(request: EventsIngestRequest):
             detail=f"NATS publish failed: {exc}"
         )
 
-    return EventsIngestResponse(
+    return schemas.EventsIngestResponse(
         status="accepted",
         message="Events queued for processing",
         events_count=len(request.events)
     )
 
 
-@app.get("/stats/dau", response_model=DAUResponse)
+@app.get("/stats/dau", response_model=schemas.DAUResponse)
 def get_dau(
-        from_date: date = Query(..., alias="from", description="Start date (YYYY-MM-DD)"),
-        to_date: date = Query(..., alias="to", description="End date (YYYY-MM-DD)"),
+        params: schemas.DAUQueryParams = Depends(),
         db: Session = Depends(get_db)
 ):
-    results = db.query(
-        func.date(Event.occurred_at).label("date"),
-        func.count(func.distinct(Event.user_id)).label("unique_users")
-    ).filter(
-        func.date(Event.occurred_at) >= from_date,
-        func.date(Event.occurred_at) <= to_date
-    ).group_by(
-        func.date(Event.occurred_at)
-    ).order_by(
-        func.date(Event.occurred_at)
-    ).all()
+    """
+    Get Daily Active Users (DAU) statistics.
 
+    Returns the count of unique users per day for the specified date range.
+    """
+    results = crud.get_daily_active_users(db, params.from_date, params.to_date)
     data = [
-        DAUItem(date=str(row.date), unique_users=row.unique_users)
+        schemas.DAUItem(date=str(row.date), unique_users=row.unique_users)
         for row in results
     ]
+    return schemas.DAUResponse(data=data)
 
-    return DAUResponse(data=data)
 
-
-@app.get("/stats/top-events", response_model=TopEventsResponse)
+@app.get("/stats/top-events", response_model=schemas.TopEventsResponse)
 def get_top_events(
-        from_date: date = Query(..., alias="from", description="Start date (YYYY-MM-DD)"),
-        to_date: date = Query(..., alias="to", description="End date (YYYY-MM-DD)"),
-        limit: int = Query(10, ge=1, le=100, description="Number of top events"),
+        params: schemas.TopEventsQueryParams = Depends(),
         db: Session = Depends(get_db)
 ):
-    results = db.query(
-        Event.event_type,
-        func.count(Event.event_id).label("count")
-    ).filter(
-        func.date(Event.occurred_at) >= from_date,
-        func.date(Event.occurred_at) <= to_date
-    ).group_by(
-        Event.event_type
-    ).order_by(
-        func.count(Event.event_id).desc()
-    ).limit(limit).all()
+    """
+    Get top events by occurrence count.
 
+    Returns the most frequently occurring events within the specified date range,
+    sorted by count in descending order.
+    """
+    results = crud.get_top_events_by_count(db, params.from_date, params.to_date, params.limit)
     data = [
-        TopEventItem(event_type=row.event_type, count=row.count)
+        schemas.TopEventItem(event_type=row.event_type, count=row.count)
         for row in results
     ]
+    return schemas.TopEventsResponse(data=data)
 
-    return TopEventsResponse(data=data)
 
-
-@app.get("/stats/retention", response_model=RetentionResponse)
+@app.get("/stats/retention", response_model=schemas.RetentionResponse)
 def get_retention(
-        start_date: date = Query(..., description="Cohort start date (YYYY-MM-DD)"),
-        windows: int = Query(3, ge=1, le=12, description="Number of retention windows"),
-        window_type: str = Query("week", regex="^(day|week)$", description="Window type: day or week"),
+        params: schemas.RetentionQueryParams = Depends(),
         db: Session = Depends(get_db)
 ):
-    window_delta = timedelta(days=1 if window_type == "day" else 7)
+    """
+    Calculate user retention for a cohort.
 
-    cohort_start = datetime.combine(start_date, datetime.min.time())
-    cohort_end = cohort_start + window_delta
+    Tracks what percentage of users from a starting cohort return in subsequent time windows.
+    Supports both daily and weekly retention windows.
+    """
+    cohort_data_dict = crud.calculate_retention(db, params.start_date, params.windows, params.window_type)
 
-    cohort_users_query = db.query(func.distinct(Event.user_id)).filter(
-        Event.occurred_at >= cohort_start,
-        Event.occurred_at < cohort_end
-    )
-    cohort_user_ids = [row[0] for row in cohort_users_query.all()]
-    cohort_size = len(cohort_user_ids)
+    if cohort_data_dict["users_count"] == 0:
+        return schemas.RetentionResponse(data=[], window_type=params.window_type)
 
-    if cohort_size == 0:
-        return RetentionResponse(
-            data=[],
-            window_type=window_type
-        )
-
-    retention_windows = []
-
-    for window_num in range(1, windows + 1):
-        window_start = cohort_start + (window_delta * window_num)
-        window_end = window_start + window_delta
-
-        returned_users = db.query(func.count(func.distinct(Event.user_id))).filter(
-            Event.user_id.in_(cohort_user_ids),
-            Event.occurred_at >= window_start,
-            Event.occurred_at < window_end
-        ).scalar()
-
-        retention_rate = (returned_users / cohort_size) * 100 if cohort_size > 0 else 0
-        retention_windows.append(round(retention_rate, 2))
-
-    cohort_data = RetentionCohort(
-        cohort_date=str(start_date),
-        users_count=cohort_size,
-        retention_windows=retention_windows
-    )
-
-    return RetentionResponse(
-        data=[cohort_data],
-        window_type=window_type
-    )
+    cohort_data = schemas.RetentionCohort(**cohort_data_dict)
+    return schemas.RetentionResponse(data=[cohort_data], window_type=params.window_type)
 
 
 @app.get("/")

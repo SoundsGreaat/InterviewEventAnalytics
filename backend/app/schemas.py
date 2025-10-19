@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field
-from datetime import datetime
+from datetime import datetime, date
 from uuid import UUID
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Literal
 
 
 class EventCreate(BaseModel):
@@ -49,3 +49,29 @@ class RetentionCohort(BaseModel):
 class RetentionResponse(BaseModel):
     data: List[RetentionCohort]
     window_type: str
+
+
+class DAUQueryParams(BaseModel):
+    from_date: date = Field(..., alias="from", description="Start date (YYYY-MM-DD)")
+    to_date: date = Field(..., alias="to", description="End date (YYYY-MM-DD)")
+
+    class Config:
+        populate_by_name = True
+
+
+class TopEventsQueryParams(BaseModel):
+    from_date: date = Field(..., alias="from", description="Start date (YYYY-MM-DD)")
+    to_date: date = Field(..., alias="to", description="End date (YYYY-MM-DD)")
+    limit: int = Field(10, ge=1, le=100, description="Number of top events")
+
+    class Config:
+        populate_by_name = True
+
+
+class RetentionQueryParams(BaseModel):
+    start_date: date = Field(..., description="Cohort start date (YYYY-MM-DD)")
+    windows: int = Field(3, ge=1, le=12, description="Number of retention windows")
+    window_type: Literal["day", "week"] = Field("week", description="Window type: day or week")
+
+    class Config:
+        populate_by_name = True

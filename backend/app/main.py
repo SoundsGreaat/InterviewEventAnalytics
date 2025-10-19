@@ -6,6 +6,7 @@ import json
 from shared.database import get_db, engine, Base
 from backend.app import crud, schemas
 from backend.app.metrics import MetricsMiddleware
+from backend.app.auth import verify_api_key
 from shared.config import settings
 
 app = FastAPI(
@@ -33,12 +34,16 @@ async def shutdown_event():
 
 
 @app.post("/events", response_model=schemas.EventsIngestResponse)
-async def ingest_events(request: schemas.EventsIngestRequest):
+async def ingest_events(
+        request: schemas.EventsIngestRequest,
+        api_key: str = Depends(verify_api_key)
+):
     """
     Ingest user events for processing.
 
     Accepts a batch of events and queues them for asynchronous processing via NATS.
     Returns immediately with acceptance status.
+    Requires valid API key authentication.
     """
     if not nats_client or not getattr(nats_client, "is_connected", False):
         raise HTTPException(
@@ -70,12 +75,14 @@ async def ingest_events(request: schemas.EventsIngestRequest):
 @app.get("/stats/dau", response_model=schemas.DAUResponse)
 def get_dau(
         params: schemas.DAUQueryParams = Depends(),
-        db: Session = Depends(get_db)
+        db: Session = Depends(get_db),
+        api_key: str = Depends(verify_api_key)
 ):
     """
     Get Daily Active Users (DAU) statistics.
 
     Returns the count of unique users per day for the specified date range.
+    Requires valid API key authentication.
     """
     results = crud.get_daily_active_users(db, params.from_date, params.to_date)
     data = [
@@ -88,13 +95,15 @@ def get_dau(
 @app.get("/stats/top-events", response_model=schemas.TopEventsResponse)
 def get_top_events(
         params: schemas.TopEventsQueryParams = Depends(),
-        db: Session = Depends(get_db)
+        db: Session = Depends(get_db),
+        api_key: str = Depends(verify_api_key)
 ):
     """
     Get top events by occurrence count.
 
     Returns the most frequently occurring events within the specified date range,
     sorted by count in descending order.
+    Requires valid API key authentication.
     """
     results = crud.get_top_events_by_count(db, params.from_date, params.to_date, params.limit)
     data = [
@@ -107,13 +116,15 @@ def get_top_events(
 @app.get("/stats/retention", response_model=schemas.RetentionResponse)
 def get_retention(
         params: schemas.RetentionQueryParams = Depends(),
-        db: Session = Depends(get_db)
+        db: Session = Depends(get_db),
+        api_key: str = Depends(verify_api_key)
 ):
     """
     Calculate user retention for a cohort.
 
     Tracks what percentage of users from a starting cohort return in subsequent time windows.
     Supports both daily and weekly retention windows.
+    Requires valid API key authentication.
     """
     cohort_data_dict = crud.calculate_retention(db, params.start_date, params.windows, params.window_type)
 

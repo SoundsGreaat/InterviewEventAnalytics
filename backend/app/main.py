@@ -5,6 +5,7 @@ import json
 
 from shared.database import get_db, engine, Base
 from backend.app import crud, schemas
+from backend.app.metrics import MetricsMiddleware
 from shared.config import settings
 
 app = FastAPI(
@@ -12,6 +13,8 @@ app = FastAPI(
     description="API for ingesting and analyzing user events",
     version="1.0.0",
 )
+
+app.add_middleware(MetricsMiddleware)
 
 nats_client = None
 

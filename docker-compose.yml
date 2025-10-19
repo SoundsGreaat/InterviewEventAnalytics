@@ -15,6 +15,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 3s
 
   nats:
     image: nats:2.11.0-alpine
@@ -30,7 +31,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 5s
+      start_period: 3s
 
   backend:
     build:

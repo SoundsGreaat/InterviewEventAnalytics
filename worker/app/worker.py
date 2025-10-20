@@ -64,10 +64,20 @@ async def process_events_message(msg: Msg, nc: nats.NATS):
 
         db = SessionLocal()
         try:
+            new_events = 0
+            duplicated_events = 0
+
             for event_data in events_data:
+                event_id = UUID(event_data["event_id"]) if isinstance(event_data["event_id"], str) else event_data["event_id"]
+
+                existing_event = db.query(Event).filter(Event.event_id == event_id).first()
+
+                if existing_event:
+                    duplicated_events += 1
+                    continue
+
                 event = Event(
-                    event_id=UUID(event_data["event_id"]) if isinstance(event_data["event_id"], str) else event_data[
-                        "event_id"],
+                    event_id=event_id,
                     occurred_at=datetime.fromisoformat(event_data["occurred_at"]) if isinstance(
                         event_data["occurred_at"], str) else event_data["occurred_at"],
                     user_id=event_data["user_id"],
@@ -75,11 +85,12 @@ async def process_events_message(msg: Msg, nc: nats.NATS):
                     properties=event_data.get("properties", {})
                 )
                 db.add(event)
+                new_events += 1
 
             db.commit()
 
             processing_time = time.perf_counter() - start_time
-            logger.info(f"Successfully saved {len(events_data)} events to database in {processing_time:.3f}s")
+            logger.info(f"Successfully processed {len(events_data)} events ({new_events} new, {duplicated_events} duplicates) in {processing_time:.3f}s")
 
         except Exception as e:
             db.rollback()

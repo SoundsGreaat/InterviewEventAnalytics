@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 from datetime import datetime
 from uuid import UUID
 
@@ -52,6 +53,7 @@ async def send_to_dlq(nc: nats.NATS, original_msg: Msg, error_msg: str):
 
 
 async def process_events_message(msg: Msg, nc: nats.NATS):
+    start_time = time.perf_counter()
     retry_count = get_retry_count(msg)
 
     try:
@@ -75,7 +77,9 @@ async def process_events_message(msg: Msg, nc: nats.NATS):
                 db.add(event)
 
             db.commit()
-            logger.info(f"Successfully saved {len(events_data)} events to database")
+
+            processing_time = time.perf_counter() - start_time
+            logger.info(f"Successfully saved {len(events_data)} events to database in {processing_time:.3f}s")
 
         except Exception as e:
             db.rollback()
@@ -86,7 +90,8 @@ async def process_events_message(msg: Msg, nc: nats.NATS):
 
     except Exception as e:
         error_msg = str(e)
-        logger.error(f"Error processing message (attempt {retry_count + 1}/{MAX_RETRIES + 1}): {error_msg}")
+        processing_time = time.perf_counter() - start_time
+        logger.error(f"Error processing message (attempt {retry_count + 1}/{MAX_RETRIES + 1}) after {processing_time:.3f}s: {error_msg}")
 
         if retry_count < MAX_RETRIES:
             retry_delay = RETRY_DELAY_BASE ** (retry_count + 1)

@@ -1,9 +1,12 @@
+import json
 from datetime import datetime, date, timedelta
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
+from fastapi import HTTPException, status
 
 from shared.models import Event
+from backend.app import schemas
 
 
 def get_daily_active_users(db: Session, from_date: date, to_date: date):
@@ -83,3 +86,40 @@ def calculate_retention(
         "users_count": cohort_size,
         "retention_windows": retention_windows
     }
+
+
+async def ingest_events(
+    request: schemas.EventsIngestRequest,
+    nats_client
+) -> schemas.EventsIngestResponse:
+    if len(request.events) > 5000:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Too many events: {len(request.events)}. Maximum allowed is 5000 events per request."
+        )
+
+    if not nats_client or not getattr(nats_client, "is_connected", False):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="NATS unavailable"
+        )
+
+    events_data = [event.model_dump(mode="json") for event in request.events]
+    message = {"events": events_data}
+
+    try:
+        await nats_client.publish(
+            "events.ingest",
+            json.dumps(message, default=str).encode()
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"NATS publish failed: {exc}"
+        )
+
+    return schemas.EventsIngestResponse(
+        status="accepted",
+        message="Events queued for processing",
+        events_count=len(request.events)
+    )

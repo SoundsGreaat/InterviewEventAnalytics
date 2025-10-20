@@ -1,7 +1,5 @@
-import json
-
 import nats
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends
 from sqlalchemy.orm import Session
 
 from backend.app import crud, schemas
@@ -47,37 +45,7 @@ async def ingest_events(
     Maximum 5000 events per request.
     Requires valid API key authentication.
     """
-    if len(request.events) > 5000:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Too many events: {len(request.events)}. Maximum allowed is 5000 events per request."
-        )
-
-    if not nats_client or not getattr(nats_client, "is_connected", False):
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="NATS unavailable"
-        )
-
-    events_data = [event.model_dump(mode="json") for event in request.events]
-    message = {"events": events_data}
-
-    try:
-        await nats_client.publish(
-            "events.ingest",
-            json.dumps(message, default=str).encode()
-        )
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"NATS publish failed: {exc}"
-        )
-
-    return schemas.EventsIngestResponse(
-        status="accepted",
-        message="Events queued for processing",
-        events_count=len(request.events)
-    )
+    return await crud.ingest_events(request, nats_client)
 
 
 @app.get("/stats/dau", response_model=schemas.DAUResponse)

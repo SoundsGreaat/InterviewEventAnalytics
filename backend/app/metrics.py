@@ -21,12 +21,12 @@ class APIMetrics:
         self._requests: Deque[Tuple[float, str, str]] = deque()
 
     def add_request(self, method: str, path: str):
-        current_time = time.time()
+        current_time = time.perf_counter()
         self._requests.append((current_time, method, path))
         self._cleanup_old_requests()
 
     def _cleanup_old_requests(self):
-        cutoff_time = time.time() - 3600
+        cutoff_time = time.perf_counter() - 3600
         while self._requests and self._requests[0][0] < cutoff_time:
             self._requests.popleft()
 
@@ -40,13 +40,13 @@ metrics = APIMetrics()
 
 class MetricsMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        start_time = time.time()
+        start_time = time.perf_counter()
 
         metrics.add_request(request.method, request.url.path)
 
         response = await call_next(request)
 
-        process_time = time.time() - start_time
+        process_time = time.perf_counter() - start_time
 
         requests_last_hour = metrics.get_requests_last_hour()
 

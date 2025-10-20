@@ -1,7 +1,6 @@
 import json
 import random
 import uuid
-import argparse
 from datetime import datetime, timedelta
 
 
